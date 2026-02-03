@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+<title>抽獎</title>
+<style>
+  /* 整體背景與字體 */
+  body {
+    background-color: #f5e4d7; /* 奶茶色背景 */
+    font-family: "Microsoft JhengHei", sans-serif;
+    color: #5c3a21; /* 深咖啡色文字 */
+    text-align: center;
+    padding: 2em;
+  }
+
+  h1 {
+    color: #7c4a2f; /* 稍深的標題色 */
+    margin-bottom: 1em;
+  }
+
+  input {
+    padding: 0.5em 1em;
+    border: 1px solid #d1bfa0;
+    border-radius: 8px;
+    font-size: 1em;
+    margin-right: 0.5em;
+  }
+
+  button {
+    padding: 0.5em 1.2em;
+    background-color: #d1bfa0; /* 奶茶色按鈕 */
+    border: none;
+    border-radius: 8px;
+    font-size: 1em;
+    cursor: pointer;
+    color: #5c3a21;
+    transition: all 0.2s;
+  }
+
+  button:hover {
+    background-color: #c4a986;
+  }
+
+  #slot {
+    font-size: 2em;
+    margin: 1em 0;
+    padding: 1em;
+    background-color: #f0d9b5; /* 奶泡色背景 */
+    border-radius: 12px;
+    display: inline-block;
+    min-width: 200px;
+  }
+
+  #msg {
+    font-size: 1.2em;
+    margin-top: 1em;
+  }
+
+  body.shake {
+    animation: shake 0.5s;
+  }
+
+  @keyframes shake {
+    0% { transform: translateX(0); }
+    25% { transform: translateX(-10px); }
+    50% { transform: translateX(10px); }
+    75% { transform: translateX(-10px); }
+    100% { transform: translateX(0); }
+  }
+</style>
+
+</head>
+<body>
+
+<h1>🎰 拉霸抽獎</h1>
+
+<input id="id" placeholder="編號">
+<input id="name" placeholder="姓名">
+<button onclick="start()">開始抽獎</button>
+
+<div id="slot">－ － －</div>
+<div id="msg"></div>
+
+<audio id="spin" src="/static/spin.mp3"></audio>
+<audio id="win" src="/static/win.mp3"></audio>
+<script>
+const slot = document.getElementById("slot");
+const msg = document.getElementById("msg");
+const spinAudio = document.getElementById("spin");
+const winAudio = document.getElementById("win");
+
+function resetUI(text = "－ － －") {
+    slot.innerText = text;
+    msg.innerText = "";
+    document.body.classList.remove("shake");
+}
+
+function start() {
+    const id = document.getElementById("id").value.trim();
+    const name = document.getElementById("name").value.trim();
+    if (!id || !name) {
+        msg.innerText = "請輸入編號與姓名";
+        return;
+    }
+
+    resetUI();
+
+    // ===== ① 先檢查資格 =====
+    fetch("/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, name })  // 這裡要傳 id + name
+    })
+    .then(res => res.json().catch(() => ({ ok: false, error: "invalid_response" })))
+    .then(check => {
+        if (!check.ok) {
+            const reason = (check.error || "").toLowerCase();
+            if (reason.includes("id_name_mismatch")) {
+                msg.innerText = "⚠️ 編號與姓名不匹配，請找中新小編確認";
+            } else if (reason.includes("used")) {
+                msg.innerText = "⚠️ 您已經抽過獎";
+            } else {
+                msg.innerText = "⚠️ 您不符合抽獎資格";
+            }
+            return;
+        }
+
+        // ===== ② 可以抽獎才顯示轉動中 =====
+        msg.innerText = "轉動中...";
+        slot.innerText = "－ － －";
+        spinAudio.currentTime = 0;
+        spinAudio.play();
+
+        fetch("/spin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, name })  // ✅ 同時傳 id + name
+        })
+        .then(res => res.json().catch(() => ({ status: "invalid_response" })))
+        .then(res => {
+            spinAudio.pause();
+
+            if (!res || !res.status) {
+                resetUI();
+                msg.innerText = "系統異常";
+                return;
+            }
+
+
+            // ===== ③ 模擬輪盤動畫 =====
+            const finalSlots = res.slots; // 真實結果
+            let currentSlots = ["－", "－", "－"];
+            let count = 0;
+            const totalSteps = 20; // 動畫步數
+            const interval = setInterval(() => {
+                count++;
+                 // 動畫過程隨機數字
+                for (let i = 0; i < 3; i++) {
+                    // 最後 5 步漸漸逼近最終結果
+                    if (count > totalSteps - 5) {
+                        currentSlots[i] = finalSlots[i];
+                    } else {
+                        currentSlots[i] = [10,20,30,50,100,200,300][Math.floor(Math.random()*7)];
+                    }
+                }
+
+                slot.innerText = currentSlots.join(" ");
+
+                if (count > totalSteps) { // 轉 20 次後停下
+                    clearInterval(interval);
+                    slot.innerText = finalSlots.join(" "); // 顯示真實結果
+
+                    if (res.status === "win") {
+                        winAudio.currentTime = 0;
+                        winAudio.play();
+                        msg.innerHTML = `🎉 恭喜中 ${res.prize} 元<br>
+                                         編號: ${id}<br>
+                                         姓名: ${name}<br>
+                                         請截圖並通知官方 LINE`;
+                        if (res.prize === 300) document.body.classList.add("shake");
+                    } else {
+                        msg.innerText = "未中獎";
+                    }
+                }
+            }, 100); // 每 150ms 更新一次數字
+        })
+        .catch(err => {
+            spinAudio.pause();
+            resetUI();
+            msg.innerText = "網路錯誤，請稍後再試";
+            console.error(err);
+        });
+
+    })
+    .catch(err => {
+        resetUI();
+        msg.innerText = "網路錯誤，請稍後再試";
+        console.error(err);
+    });
+}
+</script>
+
+</body>
+</html>
